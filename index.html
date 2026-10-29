@@ -1,1 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>MiniKart Multiplayer</title>
+<style>
+body{margin:0;background:#17212b;color:white;font-family:Arial;text-align:center}
+h2{margin:12px}
+canvas{width:96vw;max-width:500px;background:#397d3b;border:3px solid white;border-radius:12px;touch-action:none}
+button,input{font-size:17px;padding:12px;margin:5px;border:0;border-radius:10px}
+button{background:#ffbd32;color:#222;font-weight:bold}
+#controls{display:flex;justify-content:center;gap:10px}
+#controls button{font-size:27px;width:95px;touch-action:none}
+</style>
+</head>
+<body>
+<h2>🏎️ MiniKart Multiplayer</h2>
+<input id="room" placeholder="Room code" maxlength="12">
+<button id="join">Join Room</button>
+<p id="status">Enter the same room code on both devices.</p>
+<canvas id="game" width="400" height="600"></canvas>
+<div id="controls">
+<button id="left">⬅️</button>
+<button id="boost">⚡ BOOST</button>
+<button id="right">➡️</button>
+</div>
+<p>🏁 Automatic racing | 🔊 Engine sound</p>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const URL="https://diaqkfmhohihivspfdua.supabase.co";
+const KEY="sb_publishable_w6Jc3sSTdIa5A3l6GgUGXw_1AbO3PuJ";
+const db=window.supabase.createClient(URL,KEY);
+
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+const id=Math.random().toString(36).slice(2,9);
+const colors=["#38bdf8","#ff3b30","#facc15","#e879f9","#ffffff"];
+const color=colors[Math.floor(Math.random()*colors.length)];
+
+let car={x:100+Math.random()*200,y:450,color};
+let players={};
+let channel=null,room="";
+let left=false,right=false,boost=false;
+let roadOffset=0,lastSend=0;
+let audio=null,osc=null,gain=null;
+let joined=false;
+
+function startSound(){
+  try{
+    if(!audio){
+      audio=new (window.AudioContext||window.webkitAudioContext)();
+      osc=audio.createOscillator();
+      gain=audio.createGain();
+      const filter=audio.createBiquadFilter();
+      osc.type="sawtooth";
+      filter.type="lowpass";
+      filter.frequency.value=500;
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(audio.destination);
+      gain.gain.value=0;
+      osc.start();
+    }
+    if(audio.state==="suspended")audio.resume();
+  }catch(e){}
+}
+
+function drawCar(a){
+  ctx.fillStyle="#222";
+  ctx.fillRect(a.x-15,a.y-14,6,13);
+  ctx.fillRect(a.x+9,a.y-14,6,13);
+  ctx.fillRect(a.x-15,a.y+8,6,13);
+  ctx.fillRect(a.x+9,a.y+8,6,13);
+  ctx.fillStyle=a.color;
+  ctx.fillRect(a.x-11,a.y-22,22,44);
+  ctx.fillStyle="#bcecff";
+  ctx.fillRect(a.x-7,a.y-13,14,10);
+  ctx.fillStyle="#fff5b0";
+  ctx.fillRect(a.x-8,a.y-21,5,3);
+  ctx.fillRect(a.x+3,a.y-21,5,3);
+}
+
+async function sendCar(){
+  if(!channel||!joined)return;
+  try{
+    await channel.send({
+      type:"broadcast",
+      event:"car",
+      payload:{id,x:car.x,y:car.y,color}
+    });
+  }catch(e){}
+}
+
+async function joinRoom(){
+  startSound();
+  room=document.getElementById("room").value.trim().toUpperCase();
+  if(!room){alert("Enter a room code!");return;}
+
+  joined=false;
+  players={};
+
+  if(channel){
+    const old=channel;
+    channel=null;
+    await db.removeChannel(old);
+  }
+
+  document.getElementById("status").textContent="Connecting to "+room+"...";
+
+  channel=db.channel("minikart-room-"+room,{
+    config:{broadcast:{self:false}}
+  });
+
+  channel
+  .on("broadcast",{event:"car"},({payload})=>{
+    if(payload&&payload.id&&payload.id!==id){
+      players[payload.id]={
+        x:payload.x,y:payload.y,color:payload.color||"#ff3b30",
+        lastSeen:Date.now()
+      };
+    }
+  })
+  .subscribe(status=>{
+    if(status==="SUBSCRIBED"){
+      joined=true;
+      document.getElementById("status").textContent=
+        "🟢 Connected! Room: "+room;
+      sendCar();
+    }else if(status==="CHANNEL_ERROR"||status==="TIMED_OUT"){
+      document.getElementById("status").textContent=
+        "Connection failed. Check internet and Supabase settings.";
+    }
+  });
+}
+
+document.getElementById("join").addEventListener("click",joinRoom);
+
+function control(name,which){
+  const el=document.getElementById(name);
+  el.addEventListener("pointerdown",e=>{
+    e.preventDefault();
+    el.setPointerCapture?.(e.pointerId);
+    if(which==="left")left=true;
+    if(which==="right")right=true;
+    if(which==="boost")boost=true;
+  });
+  function release(){
+    if(which==="left")left=false;
+    if(which==="right")right=false;
+    if(which==="boost")boost=false;
+  }
+  el.addEventListener("pointerup",release);
+  el.addEventListener("pointercancel",release);
+  el.addEventListener("lostpointercapture",release);
+}
+control("left","left");
+control("right","right");
+control("boost","boost");
+
+function frame(time){
+  const speed=boost?8:4;
+  roadOffset=(roadOffset+speed)%60;
+
+  if(left)car.x-=boost?6:4;
+  if(right)car.x+=boost?6:4;
+  car.x=Math.max(55,Math.min(345,car.x));
+
+  if(audio&&osc&&gain){
+    osc.frequency.setTargetAtTime(boost?180:115,audio.currentTime,0.08);
+    gain.gain.setTargetAtTime(joined?(boost?0.045:0.025):0,audio.currentTime,0.08);
+  }
+
+  ctx.clearRect(0,0,400,600);
+
+  ctx.fillStyle="#267536";
+  ctx.fillRect(0,0,400,600);
+
+  ctx.fillStyle="#555";
+  ctx.fillRect(35,0,330,600);
+
+  ctx.fillStyle="#eee";
+  for(let y=-60+roadOffset;y<600;y+=60){
+    ctx.fillRect(195,y,10,30);
+  }
+
+  ctx.fillStyle="#ffeb3b";
+  ctx.fillRect(45,0,5,600);
+  ctx.fillRect(350,0,5,600);
+
+  ctx.fillStyle="#fff";
+  ctx.font="bold 15px Arial";
+  ctx.fillText(boost?"⚡ TURBO!":"SPEED "+(boost?180:100),55,25);
+
+  for(const [pid,p] of Object.entries(players)){
+    if(Date.now()-p.lastSeen>5000){
+      delete players[pid];
+      continue;
+    }
+    drawCar(p);
+  }
+
+  drawCar(car);
+
+  if(joined&&time-lastSend>100){
+    lastSend=time;
+    sendCar();
+  }
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
