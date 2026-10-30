@@ -106,7 +106,34 @@ async function sendCar(){
     console.log("Send error:",e);
   }
 }
+let soundContext, engineOscillator, engineVolume;
 
+function startEngineSound() {
+  try {
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio) return;
+
+    if (!soundContext) {
+      soundContext = new Audio();
+      engineOscillator = soundContext.createOscillator();
+      engineVolume = soundContext.createGain();
+
+      engineOscillator.type = "sawtooth";
+      engineOscillator.frequency.value = 110;
+      engineVolume.gain.value = 0.025;
+
+      engineOscillator.connect(engineVolume);
+      engineVolume.connect(soundContext.destination);
+      engineOscillator.start();
+    }
+
+    if (soundContext.state === "suspended") {
+      soundContext.resume();
+    }
+  } catch (error) {
+    console.log("Sound error:", error);
+  }
+}
 async function joinRoom(){
   room=document.getElementById("room").value.trim().toUpperCase();
 
